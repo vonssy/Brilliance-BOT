@@ -132,10 +132,10 @@ class Brilliance:
     def print_question(self):
         while True:
             try:
-                print("1. Run With Monosans Proxy")
-                print("2. Run With Private Proxy")
-                print("3. Run Without Proxy")
-                choose = int(input("Choose [1/2/3] -> ").strip())
+                print(f"{Fore.WHITE + Style.BRIGHT}1. Run With Monosans Proxy{Style.RESET_ALL}")
+                print(f"{Fore.WHITE + Style.BRIGHT}2. Run With Private Proxy{Style.RESET_ALL}")
+                print(f"{Fore.WHITE + Style.BRIGHT}3. Run Without Proxy{Style.RESET_ALL}")
+                choose = int(input(f"{Fore.BLUE + Style.BRIGHT}Choose [1/2/3] -> {Style.RESET_ALL}").strip())
 
                 if choose in [1, 2, 3]:
                     proxy_type = (
@@ -144,11 +144,34 @@ class Brilliance:
                         "Run Without Proxy"
                     )
                     print(f"{Fore.GREEN + Style.BRIGHT}{proxy_type} Selected.{Style.RESET_ALL}")
-                    return choose
+                    break
                 else:
                     print(f"{Fore.RED + Style.BRIGHT}Please enter either 1, 2 or 3.{Style.RESET_ALL}")
             except ValueError:
                 print(f"{Fore.RED + Style.BRIGHT}Invalid input. Enter a number (1, 2 or 3).{Style.RESET_ALL}")
+
+        rotate = False
+        if choose in [1, 2]:
+            while True:
+                rotate = input(f"{Fore.BLUE + Style.BRIGHT}Rotate Invalid Proxy? [y/n] -> {Style.RESET_ALL}").strip()
+
+                if rotate in ["y", "n"]:
+                    rotate = rotate == "y"
+                    break
+                else:
+                    print(f"{Fore.RED + Style.BRIGHT}Invalid input. Enter 'y' or 'n'.{Style.RESET_ALL}")
+
+        return choose, rotate
+    
+    async def check_connection(self, proxy=None):
+        connector = ProxyConnector.from_url(proxy) if proxy else None
+        try:
+            async with ClientSession(connector=connector, timeout=ClientTimeout(total=30)) as session:
+                async with session.get(url=self.BASE_API, headers={}) as response:
+                    response.raise_for_status()
+                    return True
+        except (Exception, ClientResponseError) as e:
+            return None
     
     async def user_login(self, email: str, password: str, proxy=None, retries=5):
         url = f"{self.BASE_API}/login"
@@ -236,114 +259,174 @@ class Brilliance:
                     await asyncio.sleep(5)
                     continue
                 return None
-        
-    async def process_accounts(self, email: str, password: str, use_proxy: bool):
-        proxy = self.get_next_proxy_for_account(email) if use_proxy else None
-        token = None
-        while token is None:
-            token = await self.user_login(email, password, proxy)
-            if not token:
-                self.log(
-                    f"{Fore.CYAN+Style.BRIGHT}Status  :{Style.RESET_ALL}"
-                    f"{Fore.RED+Style.BRIGHT} Login Failed {Style.RESET_ALL}"
-                )
-                proxy = self.rotate_proxy_for_account(email) if use_proxy else None
-                continue
+            
+    async def process_check_connection(self, email: str, use_proxy: bool, rotate_proxy: bool):
+        message = "Checking Connection, Wait..."
+        if use_proxy:
+            message = "Checking Proxy Connection, Wait..."
 
-        self.log(
-            f"{Fore.CYAN+Style.BRIGHT}Status  :{Style.RESET_ALL}"
-            f"{Fore.GREEN+Style.BRIGHT} Login Success {Style.RESET_ALL}"
+        print(
+            f"{Fore.CYAN + Style.BRIGHT}[ {datetime.now().astimezone(wib).strftime('%x %X %Z')} ]{Style.RESET_ALL}"
+            f"{Fore.WHITE + Style.BRIGHT} | {Style.RESET_ALL}"
+            f"{Fore.YELLOW + Style.BRIGHT}{message}{Style.RESET_ALL}",
+            end="\r",
+            flush=True
         )
 
+        proxy = self.get_next_proxy_for_account(email) if use_proxy else None
+
+        if rotate_proxy:
+            is_valid = None
+            while is_valid is None:
+                is_valid = await self.check_connection(proxy)
+                if not is_valid:
+                    self.log(
+                        f"{Fore.CYAN+Style.BRIGHT}Proxy   :{Style.RESET_ALL}"
+                        f"{Fore.WHITE+Style.BRIGHT} {proxy} {Style.RESET_ALL}"
+                        f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                        f"{Fore.RED+Style.BRIGHT} Not 200 OK, {Style.RESET_ALL}"
+                        f"{Fore.YELLOW+Style.BRIGHT}Rotating Proxy...{Style.RESET_ALL}"
+                    )
+                    proxy = self.rotate_proxy_for_account(email) if use_proxy else None
+                    await asyncio.sleep(5)
+                    continue
+
+                self.log(
+                    f"{Fore.CYAN+Style.BRIGHT}Proxy   :{Style.RESET_ALL}"
+                    f"{Fore.WHITE+Style.BRIGHT} {proxy} {Style.RESET_ALL}"
+                    f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                    f"{Fore.GREEN+Style.BRIGHT} 200 OK {Style.RESET_ALL}                  "
+                )
+
+                return True
+
+        is_valid = await self.check_connection(proxy)
+        if not is_valid:
+            self.log(
+                f"{Fore.CYAN+Style.BRIGHT}Proxy   :{Style.RESET_ALL}"
+                f"{Fore.WHITE+Style.BRIGHT} {proxy} {Style.RESET_ALL}"
+                f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                f"{Fore.RED+Style.BRIGHT} Not 200 OK {Style.RESET_ALL}          "
+            )
+            return False
+        
         self.log(
             f"{Fore.CYAN+Style.BRIGHT}Proxy   :{Style.RESET_ALL}"
             f"{Fore.WHITE+Style.BRIGHT} {proxy} {Style.RESET_ALL}"
+            f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+            f"{Fore.GREEN+Style.BRIGHT} 200 OK {Style.RESET_ALL}                  "
         )
 
-        profile = await self.user_profile(token, proxy)
-        if profile:
-            binc_balance = profile[0].get("binc", 0)
+        return True
+    
+    async def process_user_login(self, email: str, password: str, use_proxy: bool):
+        proxy = self.get_next_proxy_for_account(email) if use_proxy else None
 
-            self.log(
-                f"{Fore.CYAN+Style.BRIGHT}Balance :{Style.RESET_ALL}"
-                f"{Fore.WHITE+Style.BRIGHT} {binc_balance} BINC {Style.RESET_ALL}"
-            )
-
-            daily_reward = await self.user_daily_reward(token, proxy)
-            if daily_reward:
-                claim_status = daily_reward.get("claim")
-                if claim_status == "No":
-                    claim = await self.claim_daily_reward(token, proxy)
-
-                    if claim and claim.get("success") == "Claim is successful":
-                        self.log(
-                            f"{Fore.CYAN+Style.BRIGHT}Check-In:{Style.RESET_ALL}"
-                            f"{Fore.GREEN+Style.BRIGHT} Is Claimed {Style.RESET_ALL}"
-                            f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
-                            f"{Fore.CYAN+Style.BRIGHT} Reward: {Style.RESET_ALL}"
-                            f"{Fore.WHITE+Style.BRIGHT}5 BINC{Style.RESET_ALL}"
-                        )
-                    else:
-                        self.log(
-                            f"{Fore.CYAN+Style.BRIGHT}Check-In:{Style.RESET_ALL}"
-                            f"{Fore.RED+Style.BRIGHT} Not Claimed {Style.RESET_ALL}"
-                        )
-                elif claim_status == "Yes":
-                    self.log(
-                        f"{Fore.CYAN+Style.BRIGHT}Check-In:{Style.RESET_ALL}"
-                        f"{Fore.YELLOW+Style.BRIGHT} Already Claimed {Style.RESET_ALL}"
-                    )
-                else:
-                    self.log(
-                        f"{Fore.CYAN+Style.BRIGHT}Check-In:{Style.RESET_ALL}"
-                        f"{Fore.YELLOW+Style.BRIGHT} GET Status Failed {Style.RESET_ALL}"
-                    )
-            else:
-                self.log(
-                    f"{Fore.CYAN+Style.BRIGHT}Check-In:{Style.RESET_ALL}"
-                    f"{Fore.RED+Style.BRIGHT} GET Status Failed {Style.RESET_ALL}"
-                )
-
-            mining_time = profile[0].get("miningtime")
-            if mining_time:
-                utc_now = datetime.now(timezone.utc)
-                next_claim_mining_utc = datetime.fromisoformat(mining_time + "+00:00")
-
-                if utc_now >= next_claim_mining_utc:
-                    claim = await self.claim_mining(token, proxy)
-                    if claim and claim.get("success") == "Mining is successful":
-                        binc_balance = claim.get("binc", 0)
-                        self.log(
-                            f"{Fore.CYAN+Style.BRIGHT}Mining  :{Style.RESET_ALL}"
-                            f"{Fore.GREEN+Style.BRIGHT} Is Claimed {Style.RESET_ALL}"
-                            f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
-                            f"{Fore.CYAN+Style.BRIGHT} Balance Now: {Style.RESET_ALL}"
-                            f"{Fore.WHITE+Style.BRIGHT}{binc_balance} BINC{Style.RESET_ALL}"
-                        )
-                    else:
-                        self.log(
-                            f"{Fore.CYAN+Style.BRIGHT}Mining  :{Style.RESET_ALL}"
-                            f"{Fore.RED+Style.BRIGHT} Not Claimed {Style.RESET_ALL}"
-                        )
-                else:
-                    next_claim_mining_wib = next_claim_mining_utc.astimezone(wib).strftime('%x %X %Z')
-                    self.log(
-                        f"{Fore.CYAN+Style.BRIGHT}Mining  :{Style.RESET_ALL}"
-                        f"{Fore.YELLOW+Style.BRIGHT} Already Claimed {Style.RESET_ALL}"
-                        f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
-                        f"{Fore.CYAN+Style.BRIGHT} Next Claim at: {Style.RESET_ALL}"
-                        f"{Fore.WHITE+Style.BRIGHT}{next_claim_mining_wib}{Style.RESET_ALL}"
-                    )
-            else:
-                self.log(
-                    f"{Fore.CYAN+Style.BRIGHT}Mining  :{Style.RESET_ALL}"
-                    f"{Fore.RED+Style.BRIGHT} GET Status Failed {Style.RESET_ALL}"
-                )
-        else:
+        token = await self.user_login(email, password, proxy)
+        if not token:
             self.log(
                 f"{Fore.CYAN+Style.BRIGHT}Status  :{Style.RESET_ALL}"
-                f"{Fore.RED+Style.BRIGHT} GET Profile Data Failed {Style.RESET_ALL}"
+                f"{Fore.RED+Style.BRIGHT} Login Failed {Style.RESET_ALL}"
             )
+            return None
+        
+        return token
+        
+    async def process_accounts(self, email: str, password: str, use_proxy: bool, rotate_proxy: bool):
+        is_valid = await self.process_check_connection(email, use_proxy, rotate_proxy)
+        if is_valid:
+            token = await self.process_user_login(email, password, use_proxy)
+            if token:
+                proxy = self.get_next_proxy_for_account(email) if use_proxy else None
+                self.log(
+                    f"{Fore.CYAN + Style.BRIGHT}Status  :{Style.RESET_ALL}"
+                    f"{Fore.GREEN + Style.BRIGHT} Login Success {Style.RESET_ALL}"
+                )
+
+                profile = await self.user_profile(token, proxy)
+                if profile:
+                    binc_balance = profile[0].get("binc", 0)
+
+                    self.log(
+                        f"{Fore.CYAN+Style.BRIGHT}Balance :{Style.RESET_ALL}"
+                        f"{Fore.WHITE+Style.BRIGHT} {binc_balance} BINC {Style.RESET_ALL}"
+                    )
+
+                    daily_reward = await self.user_daily_reward(token, proxy)
+                    if daily_reward:
+                        claim_status = daily_reward.get("claim")
+                        if claim_status == "No":
+                            claim = await self.claim_daily_reward(token, proxy)
+
+                            if claim and claim.get("success") == "Claim is successful":
+                                self.log(
+                                    f"{Fore.CYAN+Style.BRIGHT}Check-In:{Style.RESET_ALL}"
+                                    f"{Fore.GREEN+Style.BRIGHT} Is Claimed {Style.RESET_ALL}"
+                                    f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                                    f"{Fore.CYAN+Style.BRIGHT} Reward: {Style.RESET_ALL}"
+                                    f"{Fore.WHITE+Style.BRIGHT}5 BINC{Style.RESET_ALL}"
+                                )
+                            else:
+                                self.log(
+                                    f"{Fore.CYAN+Style.BRIGHT}Check-In:{Style.RESET_ALL}"
+                                    f"{Fore.RED+Style.BRIGHT} Not Claimed {Style.RESET_ALL}"
+                                )
+                        elif claim_status == "Yes":
+                            self.log(
+                                f"{Fore.CYAN+Style.BRIGHT}Check-In:{Style.RESET_ALL}"
+                                f"{Fore.YELLOW+Style.BRIGHT} Already Claimed {Style.RESET_ALL}"
+                            )
+                        else:
+                            self.log(
+                                f"{Fore.CYAN+Style.BRIGHT}Check-In:{Style.RESET_ALL}"
+                                f"{Fore.YELLOW+Style.BRIGHT} GET Status Failed {Style.RESET_ALL}"
+                            )
+                    else:
+                        self.log(
+                            f"{Fore.CYAN+Style.BRIGHT}Check-In:{Style.RESET_ALL}"
+                            f"{Fore.RED+Style.BRIGHT} GET Status Failed {Style.RESET_ALL}"
+                        )
+
+                    mining_time = profile[0].get("miningtime")
+                    if mining_time:
+                        utc_now = datetime.now(timezone.utc)
+                        next_claim_mining_utc = datetime.fromisoformat(mining_time + "+00:00")
+
+                        if utc_now >= next_claim_mining_utc:
+                            claim = await self.claim_mining(token, proxy)
+                            if claim and claim.get("success") == "Mining is successful":
+                                binc_balance = claim.get("binc", 0)
+                                self.log(
+                                    f"{Fore.CYAN+Style.BRIGHT}Mining  :{Style.RESET_ALL}"
+                                    f"{Fore.GREEN+Style.BRIGHT} Is Claimed {Style.RESET_ALL}"
+                                    f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                                    f"{Fore.CYAN+Style.BRIGHT} Balance Now: {Style.RESET_ALL}"
+                                    f"{Fore.WHITE+Style.BRIGHT}{binc_balance} BINC{Style.RESET_ALL}"
+                                )
+                            else:
+                                self.log(
+                                    f"{Fore.CYAN+Style.BRIGHT}Mining  :{Style.RESET_ALL}"
+                                    f"{Fore.RED+Style.BRIGHT} Not Claimed {Style.RESET_ALL}"
+                                )
+                        else:
+                            next_claim_mining_wib = next_claim_mining_utc.astimezone(wib).strftime('%x %X %Z')
+                            self.log(
+                                f"{Fore.CYAN+Style.BRIGHT}Mining  :{Style.RESET_ALL}"
+                                f"{Fore.YELLOW+Style.BRIGHT} Already Claimed {Style.RESET_ALL}"
+                                f"{Fore.MAGENTA+Style.BRIGHT}-{Style.RESET_ALL}"
+                                f"{Fore.CYAN+Style.BRIGHT} Next Claim at: {Style.RESET_ALL}"
+                                f"{Fore.WHITE+Style.BRIGHT}{next_claim_mining_wib}{Style.RESET_ALL}"
+                            )
+                    else:
+                        self.log(
+                            f"{Fore.CYAN+Style.BRIGHT}Mining  :{Style.RESET_ALL}"
+                            f"{Fore.RED+Style.BRIGHT} GET Status Failed {Style.RESET_ALL}"
+                        )
+                else:
+                    self.log(
+                        f"{Fore.CYAN+Style.BRIGHT}Status  :{Style.RESET_ALL}"
+                        f"{Fore.RED+Style.BRIGHT} GET Profile Data Failed {Style.RESET_ALL}"
+                    )
         
     async def main(self):
         try:
@@ -352,7 +435,7 @@ class Brilliance:
                 self.log(f"{Fore.RED+Style.BRIGHT}No Accounts Loaded.{Style.RESET_ALL}")
                 return
             
-            use_proxy_choice = self.print_question()
+            use_proxy_choice, rotate_proxy = self.print_question()
 
             while True:
                 use_proxy = False
@@ -381,7 +464,7 @@ class Brilliance:
                                 f"{Fore.WHITE + Style.BRIGHT} {self.mask_account(email)} {Style.RESET_ALL}"
                                 f"{Fore.CYAN + Style.BRIGHT}]{separator}{Style.RESET_ALL}"
                             )
-                            await self.process_accounts(email, password, use_proxy)
+                            await self.process_accounts(email, password, use_proxy, rotate_proxy)
                             await asyncio.sleep(3)
 
                 self.log(f"{Fore.CYAN + Style.BRIGHT}={Style.RESET_ALL}"*68)
